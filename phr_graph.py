@@ -8,6 +8,21 @@ import io
 import pandas as pd 
 from matplotlib import cm
 
+def percent_identity_to_rgb(percent_identity, min_percent_identity=80):
+	if percent_identity == 0:
+		return "255,255,255"
+	if percent_identity <= 1:
+		percent_identity=percent_identity*100
+	if percent_identity < min_percent_identity:
+		return "255,255,220"
+
+	cmap = plt.get_cmap('YlOrRd')
+	norm = mcolors.Normalize(vmin=min_percent_identity, vmax=100)
+	rgba = cmap(norm(percent_identity))
+	rgb = tuple(int(255 * x) for x in rgba[:3])
+	return str(rgb[0]) + "," + str(rgb[1]) + "," + str(rgb[2])
+
+
 def compute_circular_positions(nodes, scale=1, wiggle_factor=0.025):
 	angle = 2 * math.pi / len(nodes)
 	pos = {}
