@@ -1,12 +1,15 @@
 import sys
 import networkx as nx
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 import numpy as np
 import math
 import seaborn as sns
 import io
 import pandas as pd 
 from matplotlib import cm
+
+NODE_SIZE=750
 
 def compute_circular_positions(nodes, scale=1, wiggle_factor=0.025):
 	angle = 2 * math.pi / len(nodes)  # Angle between each node
@@ -48,20 +51,39 @@ def get_order(species):
 	return nor_plus_acros, nor_minus_acros, ancient_acros, custom_order
 
 def rescale_edge_positions(pos, start, end, radius):
-    """
-    Rescale edge positions to connect to node boundaries instead of centers.
-    """
-    x0, y0 = pos[start]
-    x1, y1 = pos[end]
-    dx, dy = x1 - x0, y1 - y0
-    dist = np.sqrt(dx**2 + dy**2)
-    # Scale dx, dy to stop at the boundary of the node
-    dx, dy = dx / dist * radius, dy / dist * radius
-    return (x0 + dx, y0 + dy), (x1 - dx, y1 - dy)
+	"""
+	Rescale edge positions to connect to node boundaries instead of centers.
+	"""
+	x0, y0 = pos[start]
+	x1, y1 = pos[end]
+	dx, dy = x1 - x0, y1 - y0
+	dist = np.sqrt(dx**2 + dy**2)
+	# Scale dx, dy to stop at the boundary of the node
+	dx, dy = dx / dist * radius, dy / dist * radius
+	return (x0 + dx, y0 + dy), (x1 - dx, y1 - dy)
 
-def node_size_to_radius(node_size):
-    """Convert node_size (area in points²) to node_radius (radius in data units)."""
-    return np.sqrt(node_size / np.pi)
+def node_radius_data_units(node_size, ax, fig):
+	"""
+	Convert a node's size (in points^2) to data-unit radius for clipping edges.
+	"""
+	# node_size is area in points^2 → radius in points
+	radius_pts = np.sqrt(node_size / np.pi)
+	
+	# Convert points to pixels
+	pts_to_px = 1 / 72 * fig.dpi
+	radius_px = radius_pts * pts_to_px
+	
+	# Convert pixels → data coordinates
+	xlim = ax.get_xlim()
+	ylim = ax.get_ylim()
+	xmin, xmax = xlim
+	ymin, ymax = ylim
+	
+	dx_data = (xmax - xmin) / ax.bbox.width * radius_px
+	dy_data = (ymax - ymin) / ax.bbox.height * radius_px
+	
+	# Use the average scaling (circle)
+	return (dx_data + dy_data) / 2
 
 relationship_tsv = sys.argv[1]
 species = sys.argv[2]
@@ -86,15 +108,17 @@ cmap = cm.get_cmap('YlOrRd')
 df['edge_color'] = df['normalized_pid'].apply(lambda pid: cmap(pid))
 df['edge_weight'] = df['normalized_bp']
 df_subset = df[df['species'] == species]
+df_subset.sort_values('normalized_pid', inplace=True, ascending=False)
 
 print(df_subset)
 
 G = nx.Graph()
+
 for _, row in df_subset.iterrows():
 	chrom1 = row['chrom1']
 	chrom2 = row['chrom2']
-	normalized_bp = df_subset['normalized_bp']
-	normalized_pid = df_subset['normalized_pid']
+	normalized_bp = row['normalized_bp']
+	normalized_pid = row['normalized_pid']
 	weight = row['edge_weight']
 	color = row['edge_color']
 	G.add_edge(chrom1, chrom2, norm_bp=normalized_bp, norm_pid=normalized_pid, weight=weight, color=color)
@@ -124,18 +148,58 @@ node_labels = {node: node for node in G.nodes()}
 font_colors = {node: '#D0D0D0' if node in nor_plus_acros else 'black' for node in G.nodes()}
 
 plt.figure(figsize=(10, 10))
-nx.draw_networkx_nodes(G, pos, node_color=node_colors, edgecolors=node_colors, node_size=750)
+nx.draw_networkx_nodes(G, pos, node_color=node_colors, edgecolors=node_colors, node_size=NODE_SIZE)
 
-nx.draw_networkx_edges(G, pos, width=edge_weights, edge_color=edge_colors)
+edges_sorted = sorted(
+	G.edges(data=True),
+	key=lambda x: x[2]["norm_pid"],
+	reverse=False  # lowest first → highest drawn last = on top
+)
+
+ax = plt.gca()
+fig = plt.gcf()
+
+node_size = NODE_SIZE
+node_r = node_radius_data_units(node_size, ax, fig)
+
+
+
+for u, v, data in edges_sorted:
+	x0, y0 = pos[u]
+	x1, y1 = pos[v]
+
+	dx = x1 - x0
+	dy = y1 - y0
+	dist = np.sqrt(dx**2 + dy**2)
+
+	# shrink the line at both ends
+	shrink = node_r
+
+	x0_new = x0 + dx/dist * shrink
+	y0_new = y0 + dy/dist * shrink
+	x1_new = x1 - dx/dist * shrink
+	y1_new = y1 - dy/dist * shrink
+
+	line = mlines.Line2D(
+		[x0_new, x1_new],
+		[y0_new, y1_new],
+		linewidth=data["weight"],
+		color=data["color"],
+		antialiased=False,
+		zorder=1
+	)
+	ax.add_line(line)
+
+# nx.draw_networkx_edges(G, pos, width=edge_weights, edge_color=edge_colors)
 
 for node, label in node_labels.items():
-    nx.draw_networkx_labels(
-        G, pos,
-        labels={node: label},  # Only the current node
-        font_size=16,
-        font_color=font_colors[node],
+	nx.draw_networkx_labels(
+		G, pos,
+		labels={node: label},  # Only the current node
+		font_size=16,
+		font_color=font_colors[node],
 		font_family='Arial'
-    )
+	)
 
 plt.title(species + ' Relationship Graph')
 plt.axis('off')
